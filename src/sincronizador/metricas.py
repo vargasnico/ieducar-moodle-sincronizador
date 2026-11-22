@@ -8,3 +8,8 @@ MENSAGENS = Counter(
     ["tipo", "resultado"],
 )
 COMANDOS = Counter("sincronizador_comandos_total", "Comandos publicados para o Moodle", ["tipo"])
+OBSOLETOS = Counter(
+    "eventos_obsoletos_total",
+    "Eventos descartados porque uma versão mais nova da entidade já foi tratada",
+    ["tipo"],
+)

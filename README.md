@@ -34,7 +34,8 @@ As regras estão em [`src/sincronizador/regras.py`](src/sincronizador/regras.py)
 | `moodle.inscricao.remover.v1` | `usuario`, `curso`, `papel` |
 
 **Dados próprios:** `turma` (componentes da última versão, para ocultar cursos) e
-`inscricao` (inscrições já pedidas, para saber o que remover).
+`inscricao` (inscrições já pedidas, para saber o que remover) e `versao` (ciclo do
+último evento tratado de cada turma, servidor e aluno).
 
 ## API
 
@@ -53,6 +54,9 @@ As regras estão em [`src/sincronizador/regras.py`](src/sincronizador/regras.py)
 - Publica os comandos antes de gravar o estado.
 - Evento que falha volta pela fila `sincronizador.retry` (10s); depois de 5 falhas
   vai para `sincronizador.dlq`.
+- **Versão por entidade:** um evento de um ciclo anterior ao último tratado para a
+  mesma entidade é descartado (`eventos_obsoletos_total`), então reprocessar a DLQ não
+  desfaz uma alteração mais nova.
 
 ## Configuração
 

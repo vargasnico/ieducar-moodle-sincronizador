@@ -123,3 +123,18 @@ async def test_servidor_sem_turma_e_suspenso(sync):
     await s.tratar(msg("ieducar.servidor.alterado", servidor))
     assert broker.tipos() == ["moodle.usuario.sincronizar"]
     assert broker.publicadas[0].dados["suspenso"] is True
+
+
+@pytest.mark.anyio
+async def test_evento_antigo_reprocessado_da_dlq_e_descartado(sync):
+    """O evento do ciclo 1 ficou na DLQ; o do ciclo 2 (aluno dispensado de Matemática)
+    passou. Reprocessar o do ciclo 1 não pode reinscrever o aluno."""
+    s, broker = sync
+    ciclo1 = msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1, 2]}]))
+    ciclo2 = msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1]}]))
+    await s.tratar(ciclo2)
+    broker.publicadas.clear()
+    await s.tratar(ciclo1)
+    assert broker.publicadas == []
+    cursos = {c for (c,) in s.db.execute("SELECT curso FROM inscricao")}
+    assert cursos == {"ieducar-turma-10-componente-1"}

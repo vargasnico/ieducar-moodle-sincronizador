@@ -10,6 +10,10 @@ O sincronizador guarda só o necessário para saber o que REMOVER:
 
 Ordem: publica os comandos e só depois grava o estado. Se cair entre os dois, o
 RabbitMQ entrega o evento de novo e tudo é recalculado (cenário 4).
+
+Versão: um evento de um ciclo anterior ao último já tratado para a mesma entidade
+(ex.: reprocessado da DLQ) é descartado, para não desfazer o estado mais novo
+(versoes.py).
 """
 
 import json
@@ -19,7 +23,8 @@ import sqlite3
 from sincronizador import regras
 from sincronizador.broker import Broker
 from sincronizador.mensagem import Mensagem
-from sincronizador.metricas import COMANDOS
+from sincronizador.metricas import COMANDOS, OBSOLETOS
+from sincronizador.versoes import Versoes
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +39,20 @@ class Sincronizador:
                 usuario TEXT, curso TEXT, papel TEXT, PRIMARY KEY (usuario, curso, papel)
             );
         """)
+        self.versoes = Versoes(db)
 
     async def tratar(self, evento: Mensagem) -> None:
+        # Entidade do evento: "turma:10", "servidor:7", "aluno:20".
+        tipo = evento.tipo.split(".")[1]
+        chave = f"{tipo}:{evento.dados[f'{tipo}_id']}"
+        if self.versoes.obsoleta(chave, evento.ciclo_iniciado_em):
+            log.warning(
+                "%s de %s descartado: já foi tratada uma versão mais nova",
+                evento.routing_key,
+                chave,
+            )
+            OBSOLETOS.labels(evento.routing_key).inc()
+            return
         self._evento = evento
         self._comandos: list[Mensagem] = []
         self._gravar: list[tuple[str, tuple]] = []
@@ -72,6 +89,7 @@ class Sincronizador:
         with self.db:
             for sql, params in self._gravar:
                 self.db.execute(sql, params)
+        self.versoes.registrar(chave, evento.ciclo_iniciado_em)
         log.info("%s → %s comando(s)", evento.routing_key, len(self._comandos))
 
     def _comando(self, tipo: str, dados: dict) -> None:
