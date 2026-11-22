@@ -1,12 +1,13 @@
-"""Regras e sincronizador, sem rede (broker falso)."""
+"""Caso de uso TratarEvento com o adaptador SQLite em memória e um publicador falso."""
 
 import sqlite3
 from datetime import UTC, datetime
 
 import pytest
 
+from sincronizador.adaptadores.sqlite import EstadoSqlite
+from sincronizador.aplicacao.tratar_evento import TratarEvento
 from sincronizador.mensagem import Mensagem
-from sincronizador.sincronizacao import Sincronizador
 
 
 @pytest.fixture
@@ -50,13 +51,13 @@ def aluno(turmas: list) -> dict:
 @pytest.fixture
 def sync():
     broker = BrokerFalso()
-    return Sincronizador(sqlite3.connect(":memory:"), broker), broker  # type: ignore[arg-type]
+    return TratarEvento(EstadoSqlite(sqlite3.connect(":memory:")), broker), broker  # type: ignore[arg-type]
 
 
 @pytest.mark.anyio
 async def test_turma_vira_um_curso_por_componente(sync):
     s, broker = sync
-    await s.tratar(msg("ieducar.turma.alterada", TURMA))
+    await s(msg("ieducar.turma.alterada", TURMA))
     assert [m.dados["idnumber"] for m in broker.publicadas] == [
         "ieducar-turma-10-componente-1",
         "ieducar-turma-10-componente-2",
@@ -66,11 +67,9 @@ async def test_turma_vira_um_curso_por_componente(sync):
 @pytest.mark.anyio
 async def test_componente_retirado_oculta_o_curso(sync):
     s, broker = sync
-    await s.tratar(msg("ieducar.turma.alterada", TURMA))
+    await s(msg("ieducar.turma.alterada", TURMA))
     broker.publicadas.clear()
-    await s.tratar(
-        msg("ieducar.turma.alterada", {**TURMA, "componentes": TURMA["componentes"][:1]})
-    )
+    await s(msg("ieducar.turma.alterada", {**TURMA, "componentes": TURMA["componentes"][:1]}))
     ocultos = [m.dados["idnumber"] for m in broker.publicadas if not m.dados["visivel"]]
     assert ocultos == ["ieducar-turma-10-componente-2"]
 
@@ -78,10 +77,10 @@ async def test_componente_retirado_oculta_o_curso(sync):
 @pytest.mark.anyio
 async def test_aluno_e_inscrito_e_desinscrito_ao_ganhar_dispensa(sync):
     s, broker = sync
-    await s.tratar(msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1, 2]}])))
+    await s(msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1, 2]}])))
     assert broker.tipos().count("moodle.inscricao.adicionar") == 2
     broker.publicadas.clear()
-    await s.tratar(msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1]}])))
+    await s(msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1]}])))
     removidas = [
         m.dados["curso"] for m in broker.publicadas if m.tipo == "moodle.inscricao.remover"
     ]
@@ -91,9 +90,9 @@ async def test_aluno_e_inscrito_e_desinscrito_ao_ganhar_dispensa(sync):
 @pytest.mark.anyio
 async def test_aluno_removido_e_suspenso_e_desinscrito(sync):
     s, broker = sync
-    await s.tratar(msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1]}])))
+    await s(msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1]}])))
     broker.publicadas.clear()
-    await s.tratar(msg("ieducar.aluno.removido", {"aluno_id": 20}))
+    await s(msg("ieducar.aluno.removido", {"aluno_id": 20}))
     assert broker.publicadas[0].dados == {"idnumber": "ieducar-aluno-20", "suspenso": True}
     assert broker.tipos()[1:] == ["moodle.inscricao.remover"]
 
@@ -102,10 +101,10 @@ async def test_aluno_removido_e_suspenso_e_desinscrito(sync):
 async def test_mesmo_evento_duas_vezes_gera_os_mesmos_comandos(sync):
     s, broker = sync
     evento = msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1, 2]}]))
-    await s.tratar(evento)
+    await s(evento)
     primeira = [m.dados for m in broker.publicadas]
     broker.publicadas.clear()
-    await s.tratar(evento)
+    await s(evento)
     assert [m.dados for m in broker.publicadas] == primeira
 
 
@@ -120,7 +119,7 @@ async def test_servidor_sem_turma_e_suspenso(sync):
         "ativo": True,
         "vinculos": [],
     }
-    await s.tratar(msg("ieducar.servidor.alterado", servidor))
+    await s(msg("ieducar.servidor.alterado", servidor))
     assert broker.tipos() == ["moodle.usuario.sincronizar"]
     assert broker.publicadas[0].dados["suspenso"] is True
 
@@ -132,9 +131,9 @@ async def test_evento_antigo_reprocessado_da_dlq_e_descartado(sync):
     s, broker = sync
     ciclo1 = msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1, 2]}]))
     ciclo2 = msg("ieducar.aluno.alterado", aluno([{"turma_id": 10, "componentes": [1]}]))
-    await s.tratar(ciclo2)
+    await s(ciclo2)
     broker.publicadas.clear()
-    await s.tratar(ciclo1)
+    await s(ciclo1)
     assert broker.publicadas == []
-    cursos = {c for (c,) in s.db.execute("SELECT curso FROM inscricao")}
+    cursos = {c for (c,) in s.estado.db.execute("SELECT curso FROM inscricao")}
     assert cursos == {"ieducar-turma-10-componente-1"}

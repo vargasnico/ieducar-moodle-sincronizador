@@ -65,6 +65,30 @@ As regras estão em [`src/sincronizador/regras.py`](src/sincronizador/regras.py)
 | `RABBITMQ_URL` | `amqp://guest:guest@localhost/` |
 | `DATABASE_PATH` | `data/sincronizador.db` |
 
+## Estrutura (arquitetura hexagonal)
+
+O domínio fica no centro e não conhece banco, broker nem HTTP; o caso de uso o usa
+por meio das portas (interfaces), e os adaptadores as implementam. Trocar o SQLite
+ou o RabbitMQ é trocar um adaptador; os testes usam versões em memória das portas.
+
+```
+src/sincronizador/
+├── dominio/              regras puras, sem banco, rede nem framework
+│   ├── regras.py         quem é professor, aluno, quais cursos (as regras do T1)
+│   ├── planejamento.py   evento + estado anterior → comandos e estado novo (Plano)
+│   └── versao.py         mensagem de um ciclo mais antigo é obsoleta
+├── aplicacao/
+│   └── tratar_evento.py  caso de uso: planeja, publica e só então grava o estado
+├── portas.py             interfaces: EstadoSincronizacao, PublicadorDeComandos
+├── adaptadores/          implementações das portas e entradas do serviço
+│   ├── sqlite.py         porta EstadoSincronizacao (turmas, inscrições, versões)
+│   ├── rabbitmq.py       entrada (consumo, retry, DLQ) e porta PublicadorDeComandos
+│   └── api.py            entrada HTTP (/inscricoes, /dlq/reprocessar, /health, /metrics)
+├── infra/                logs JSON, métricas
+├── mensagem.py           formato das mensagens (o contrato com os outros serviços)
+└── main.py               composição: cria os adaptadores e os injeta no caso de uso
+```
+
 ## Desenvolvimento
 
 ```bash
