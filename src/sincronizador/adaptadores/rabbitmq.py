@@ -4,7 +4,7 @@ Todos os serviços publicam na exchange "integracao" (topic), com a routing key
 `<tipo>.v<versao>`. Cada consumidor declara só a PRÓPRIA fila, com duas auxiliares:
 
     F        fila principal, ligada à exchange pelas routing keys que interessam
-    F.retry  sem consumidor; a mensagem espera ATRASO_RETRY segundos (TTL) e volta
+    F.retry  sem consumidor; a mensagem espera ATRASO_RETRY segundos e volta
              para F. Assim uma mensagem que falhou sai da frente e as outras seguem.
     F.dlq    mensagens que falharam MAX_TENTATIVAS vezes. Ficam lá até alguém
              reprocessá-las (POST /dlq/reprocessar).
@@ -14,6 +14,7 @@ serviços compartilham é o formato das mensagens, não código.
 """
 
 import logging
+import os
 from collections.abc import Awaitable, Callable
 
 import aio_pika
@@ -26,8 +27,13 @@ from sincronizador.mensagem import Mensagem
 log = logging.getLogger(__name__)
 
 EXCHANGE = "integracao"
-MAX_TENTATIVAS = 5
-ATRASO_RETRY = 10  # segundos
+# Configuráveis por ambiente (padrão: 5 tentativas, 10s de espera). A fila de retry é
+# criada com TTL de 10s, igual em infra/rabbitmq/definitions.json, e cada mensagem
+# leva a própria expiração: o RabbitMQ usa a menor das duas. Assim um atraso menor
+# (ex.: RETRY_ATRASO=3 na demonstração) vale sem recriar a fila.
+TTL_FILA_RETRY = 10  # segundos, teto do atraso
+MAX_TENTATIVAS = int(os.environ.get("RETRY_TENTATIVAS", 5))
+ATRASO_RETRY = min(float(os.environ.get("RETRY_ATRASO", TTL_FILA_RETRY)), TTL_FILA_RETRY)
 
 
 class Broker:
@@ -65,7 +71,7 @@ class Broker:
             f"{fila}.retry",
             durable=True,
             arguments={
-                "x-message-ttl": ATRASO_RETRY * 1000,
+                "x-message-ttl": TTL_FILA_RETRY * 1000,
                 "x-dead-letter-exchange": "",
                 "x-dead-letter-routing-key": fila,
             },
@@ -97,7 +103,7 @@ class Broker:
                 resultado = "sucesso"
             except Exception as exc:
                 if tentativa < MAX_TENTATIVAS:
-                    resultado, destino = "retry", f"{fila}.retry"
+                    resultado, destino, expira = "retry", f"{fila}.retry", ATRASO_RETRY
                     log.warning(
                         "%s falhou (tentativa %s de %s), nova tentativa em %ss: %r",
                         mensagem.routing_key,
@@ -107,7 +113,7 @@ class Broker:
                         exc,
                     )
                 else:
-                    resultado, destino = "dlq", f"{fila}.dlq"
+                    resultado, destino, expira = "dlq", f"{fila}.dlq", None
                     log.error(
                         "%s falhou %s vezes, enviada à DLQ: %r",
                         mensagem.routing_key,
@@ -116,7 +122,7 @@ class Broker:
                     )
                 headers = {"tentativa": tentativa, "erro": repr(exc)[:500]}
                 await self.canal.default_exchange.publish(
-                    _amqp(mensagem, headers), routing_key=destino
+                    _amqp(mensagem, headers, expira), routing_key=destino
                 )
             await amqp.ack()
             MENSAGENS.labels(mensagem.routing_key, resultado).inc()
@@ -138,7 +144,9 @@ class Broker:
         return movidas
 
 
-def _amqp(mensagem: Mensagem, headers: dict | None = None) -> aio_pika.Message:
+def _amqp(
+    mensagem: Mensagem, headers: dict | None = None, expira: float | None = None
+) -> aio_pika.Message:
     return aio_pika.Message(
         body=mensagem.model_dump_json().encode(),
         content_type="application/json",
@@ -147,4 +155,5 @@ def _amqp(mensagem: Mensagem, headers: dict | None = None) -> aio_pika.Message:
         correlation_id=mensagem.correlation_id,
         type=mensagem.routing_key,
         headers=headers or {},
+        expiration=expira,  # segundos na fila de retry; None = não expira
     )

@@ -1,6 +1,6 @@
 [project]
 name = "ieducar-moodle-sincronizador"
-version = "1.2.0"
+version = "1.3.0"
 description = "Aplica as regras da integração i-Educar → Moodle e publica comandos"
 readme = "README.md"
 authors = [

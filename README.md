@@ -52,8 +52,8 @@ As regras estão em [`src/sincronizador/regras.py`](src/sincronizador/regras.py)
 - Tratar o mesmo evento duas vezes gera os mesmos comandos (estado desejado), o que é
   inofensivo.
 - Publica os comandos antes de gravar o estado.
-- Evento que falha volta pela fila `sincronizador.retry` (10s); depois de 5 falhas
-  vai para `sincronizador.dlq`.
+- Evento que falha volta pela fila `sincronizador.retry` (`RETRY_ATRASO`, padrão 10s);
+  depois de `RETRY_TENTATIVAS` falhas (padrão 5) vai para `sincronizador.dlq`.
 - **Versão por entidade:** um evento de um ciclo anterior ao último tratado para a
   mesma entidade é descartado (`eventos_obsoletos_total`), então reprocessar a DLQ não
   desfaz uma alteração mais nova.
@@ -64,6 +64,8 @@ As regras estão em [`src/sincronizador/regras.py`](src/sincronizador/regras.py)
 |---|---|
 | `RABBITMQ_URL` | `amqp://guest:guest@localhost/` |
 | `DATABASE_PATH` | `data/sincronizador.db` |
+| `RETRY_ATRASO` | `10` (segundos na fila de retry, máximo 10) |
+| `RETRY_TENTATIVAS` | `5` (falhas até a DLQ) |
 
 ## Estrutura (arquitetura hexagonal)
 
